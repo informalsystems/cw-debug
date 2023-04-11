@@ -6,7 +6,8 @@ use cw_storage_plus::Item;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct State {
-    pub count: i32,
+    pub message: String,
+    pub setter: Addr,
     pub owner: Addr,
 }
 

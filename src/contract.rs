@@ -4,7 +4,7 @@ use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response,
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, GetCountResponse, InstantiateMsg, QueryMsg};
+use crate::msg::{ExecuteMsg, GetMessageResponse, InstantiateMsg, QueryMsg};
 use crate::state::{State, STATE};
 
 // version info for migration info
@@ -19,7 +19,8 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let state = State {
-        count: msg.count,
+        message: msg.message.clone(),
+        setter: info.sender.clone(),
         owner: info.sender.clone(),
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
@@ -28,7 +29,7 @@ pub fn instantiate(
     Ok(Response::new()
         .add_attribute("method", "instantiate")
         .add_attribute("owner", info.sender)
-        .add_attribute("count", msg.count.to_string()))
+        .add_attribute("message", msg.message))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -39,48 +40,46 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Increment {} => execute::increment(deps),
-        ExecuteMsg::Reset { count } => execute::reset(deps, info, count),
+        ExecuteMsg::SetMessage { message, sudo } => execute::set_message(deps, info, message, sudo),
     }
 }
 
 pub mod execute {
     use super::*;
 
-    pub fn increment(deps: DepsMut) -> Result<Response, ContractError> {
+    pub fn set_message(
+        deps: DepsMut,
+        info: MessageInfo,
+        message: String,
+        sudo: bool,
+    ) -> Result<Response, ContractError> {
         STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-            state.count += 1;
-            Ok(state)
-        })?;
-
-        Ok(Response::new().add_attribute("action", "increment"))
-    }
-
-    pub fn reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Response, ContractError> {
-        STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-            if info.sender != state.owner {
+            if sudo && info.sender != state.owner {
                 return Err(ContractError::Unauthorized {});
             }
-            state.count = count;
+            state.message = message;
+            state.setter = info.sender;
             Ok(state)
         })?;
-        Ok(Response::new().add_attribute("action", "reset"))
+        Ok(Response::new().add_attribute("action", "set_message"))
     }
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCount {} => to_binary(&query::count(deps)?),
+        QueryMsg::GetMessage {} => to_binary(&query::get_message(deps)?),
     }
 }
 
 pub mod query {
     use super::*;
 
-    pub fn count(deps: Deps) -> StdResult<GetCountResponse> {
+    pub fn get_message(deps: Deps) -> StdResult<GetMessageResponse> {
         let state = STATE.load(deps.storage)?;
-        Ok(GetCountResponse { count: state.count })
+        Ok(GetMessageResponse {
+            message: state.message,
+        })
     }
 }
 
@@ -94,7 +93,9 @@ mod tests {
     fn proper_initialization() {
         let mut deps = mock_dependencies();
 
-        let msg = InstantiateMsg { count: 17 };
+        let msg = InstantiateMsg {
+            message: "Hello World".to_owned(),
+        };
         let info = mock_info("creator", &coins(1000, "earth"));
 
         // we can just call .unwrap() to assert this was a success
@@ -102,55 +103,76 @@ mod tests {
         assert_eq!(0, res.messages.len());
 
         // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(17, value.count);
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetMessage {}).unwrap();
+        let value: GetMessageResponse = from_binary(&res).unwrap();
+        assert_eq!("Hello World".to_owned(), value.message);
     }
 
     #[test]
-    fn increment() {
+    fn is_sudo_creator_update() {
         let mut deps = mock_dependencies();
 
-        let msg = InstantiateMsg { count: 17 };
+        let msg = InstantiateMsg {
+            message: "Hello World".to_owned(),
+        };
         let info = mock_info("creator", &coins(2, "token"));
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // beneficiary can release it
-        let info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Increment {};
+        // update the message
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::SetMessage {
+            message: "Hello Mars".to_owned(),
+            sudo: true,
+        };
         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // should increase counter by 1
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(18, value.count);
+        // should update the message
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetMessage {}).unwrap();
+        let value: GetMessageResponse = from_binary(&res).unwrap();
+        assert_eq!("Hello Mars".to_owned(), value.message);
     }
 
     #[test]
-    fn reset() {
+    #[should_panic(expected = "Unauthorized")]
+    fn is_sudo_unauthorized_update() {
         let mut deps = mock_dependencies();
 
-        let msg = InstantiateMsg { count: 17 };
+        let msg = InstantiateMsg {
+            message: "Hello World".to_owned(),
+        };
         let info = mock_info("creator", &coins(2, "token"));
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // beneficiary can release it
-        let unauth_info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let res = execute(deps.as_mut(), mock_env(), unauth_info, msg);
-        match res {
-            Err(ContractError::Unauthorized {}) => {}
-            _ => panic!("Must return unauthorized error"),
-        }
+        // update the message
+        let info = mock_info("anyone", &coins(2, "token"));
+        let msg = ExecuteMsg::SetMessage {
+            message: "Hello Mars".to_owned(),
+            sudo: true,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+    }
 
-        // only the original creator can reset the counter
-        let auth_info = mock_info("creator", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
+    #[test]
+    fn not_sudo_unauthorized_update() {
+        let mut deps = mock_dependencies();
 
-        // should now be 5
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(5, value.count);
+        let msg = InstantiateMsg {
+            message: "Hello World".to_owned(),
+        };
+        let info = mock_info("creator", &coins(2, "token"));
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // update the message
+        let info = mock_info("anyone", &coins(2, "token"));
+        let msg = ExecuteMsg::SetMessage {
+            message: "Hello Mars".to_owned(),
+            sudo: false,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // should update the message
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetMessage {}).unwrap();
+        let value: GetMessageResponse = from_binary(&res).unwrap();
+        assert_eq!("Hello Mars".to_owned(), value.message);
     }
 }

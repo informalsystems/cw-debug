@@ -38,7 +38,9 @@ mod tests {
         let mut app = mock_app();
         let cw_template_id = app.store_code(contract_template());
 
-        let msg = InstantiateMsg { count: 1i32 };
+        let msg = InstantiateMsg {
+            message: "Hello World".to_owned(),
+        };
         let cw_template_contract_addr = app
             .instantiate_contract(
                 cw_template_id,
@@ -55,15 +57,31 @@ mod tests {
         (app, cw_template_contract)
     }
 
-    mod count {
+    mod message {
         use super::*;
         use crate::msg::ExecuteMsg;
 
         #[test]
-        fn count() {
+        fn admin_message() {
             let (mut app, cw_template_contract) = proper_instantiate();
 
-            let msg = ExecuteMsg::Increment {};
+            let msg = ExecuteMsg::SetMessage {
+                message: "Hello Jupiter".to_owned(),
+                sudo: true,
+            };
+            let cosmos_msg = cw_template_contract.call(msg).unwrap();
+            app.execute(Addr::unchecked(ADMIN), cosmos_msg).unwrap();
+        }
+
+        #[test]
+        #[should_panic(expected = "Unauthorized")]
+        fn user_message() {
+            let (mut app, cw_template_contract) = proper_instantiate();
+
+            let msg = ExecuteMsg::SetMessage {
+                message: "Hello Jupiter".to_owned(),
+                sudo: true,
+            };
             let cosmos_msg = cw_template_contract.call(msg).unwrap();
             app.execute(Addr::unchecked(USER), cosmos_msg).unwrap();
         }

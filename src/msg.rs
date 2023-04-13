@@ -22,4 +22,5 @@ pub enum QueryMsg {
 #[cw_serde]
 pub struct GetMessageResponse {
     pub message: String,
+    pub setter: String,
 }

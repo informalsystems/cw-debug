@@ -79,6 +79,7 @@ pub mod query {
         let state = STATE.load(deps.storage)?;
         Ok(GetMessageResponse {
             message: state.message,
+            setter: state.setter.to_string(),
         })
     }
 }
